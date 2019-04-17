@@ -1,7 +1,6 @@
 package com.amazonaws.services.glue.catalog;
 
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_STORAGE;
-import static org.apache.hadoop.hive.ql.exec.DDLTask.appendSerdeParams;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -10,6 +9,9 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.text.translate.CharSequenceTranslator;
+import org.apache.commons.lang3.text.translate.EntityArrays;
+import org.apache.commons.lang3.text.translate.LookupTranslator;
 import org.apache.hadoop.hive.common.StatsSetupConst;
 import org.apache.hadoop.hive.metastore.TableType;
 import org.apache.hadoop.hive.metastore.Warehouse;
@@ -29,6 +31,40 @@ import org.stringtemplate.v4.ST;
 
 public class HiveUtils {
 	private static final Logger LOG = LoggerFactory.getLogger(HiveUtils.class);
+	public static final String COLUMN_STATS_ACCURATE = "COLUMN_STATS_ACCURATE";
+	public static final String NUM_FILES = "numFiles";
+	public static final String TOTAL_SIZE = "totalSize";
+	public static final String ROW_COUNT = "numRows";
+	public static final String RAW_DATA_SIZE = "rawDataSize";
+	public static final String NUM_PARTITIONS = "numPartitions";
+	public static final String[] TABLE_PARAMS_STATS_KEYS = new String[] {
+			COLUMN_STATS_ACCURATE, NUM_FILES, TOTAL_SIZE,ROW_COUNT, RAW_DATA_SIZE, NUM_PARTITIONS};
+	public static final String DEFAULT_SERIALIZATION_FORMAT = "1";
+	private static final CharSequenceTranslator ESCAPE_HIVE_COMMAND =
+			new LookupTranslator(
+					new String[][] {
+							{"'", "\\'"},
+							{";", "\\;"},
+							{"\\", "\\\\"},
+					}).with(
+					new LookupTranslator(EntityArrays.JAVA_CTRL_CHARS_ESCAPE()));
+
+	public static String escapeHiveCommand(String str) {
+		return ESCAPE_HIVE_COMMAND.translate(str);
+	}
+
+	private static StringBuilder appendSerdeParams(
+			StringBuilder builder, Map<String, String> serdeParam) {
+		serdeParam = new TreeMap<String, String>(serdeParam);
+		builder.append("WITH SERDEPROPERTIES ( \n");
+		List<String> serdeCols = new ArrayList<String>();
+		for (Map.Entry<String, String> entry : serdeParam.entrySet()) {
+			serdeCols.add("  '" + entry.getKey() + "'='"
+					+ escapeHiveCommand(entry.getValue()) + "'");
+		}
+		builder.append(org.apache.commons.lang.StringUtils.join(serdeCols, ", \n")).append(')');
+		return builder;
+	}
 
 	// Copied from Hive's code, it's a private function so had to copy it instead of
 	// reusing.
@@ -42,7 +78,7 @@ public class HiveUtils {
 			List<String> realProps = new ArrayList<String>();
 			for (String key : properties.keySet()) {
 				if (properties.get(key) != null && (exclude == null || !exclude.contains(key))) {
-					realProps.add("  '" + key + "'='" + HiveStringUtils.escapeHiveCommand(properties.get(key)) + "'");
+					realProps.add("  '" + key + "'='" + escapeHiveCommand(properties.get(key)) + "'");
 				}
 			}
 			prop_string += StringUtils.join(realProps, ", \n");
@@ -113,7 +149,7 @@ public class HiveUtils {
 			for (FieldSchema col : cols) {
 				String columnDesc = "  `" + col.getName() + "` " + col.getType();
 				if (col.getComment() != null) {
-					columnDesc = columnDesc + " COMMENT '" + HiveStringUtils.escapeHiveCommand(col.getComment()) + "'";
+					columnDesc = columnDesc + " COMMENT '" + escapeHiveCommand(col.getComment()) + "'";
 				}
 				columns.add(columnDesc);
 			}
@@ -124,7 +160,7 @@ public class HiveUtils {
 			String tabComment = tbl.getProperty("comment");
 			if (tabComment != null) {
 				duplicateProps.add("comment");
-				tbl_comment = "COMMENT '" + HiveStringUtils.escapeHiveCommand(tabComment) + "'";
+				tbl_comment = "COMMENT '" + escapeHiveCommand(tabComment) + "'";
 			}
 
 			// Partitions
@@ -137,7 +173,7 @@ public class HiveUtils {
 					String partColDesc = "  `" + partKey.getName() + "` " + partKey.getType();
 					if (partKey.getComment() != null) {
 						partColDesc = partColDesc + " COMMENT '"
-								+ HiveStringUtils.escapeHiveCommand(partKey.getComment()) + "'";
+								+ escapeHiveCommand(partKey.getComment()) + "'";
 					}
 					partCols.add(partColDesc);
 				}
@@ -195,12 +231,12 @@ public class HiveUtils {
 			SerDeInfo serdeInfo = sd.getSerdeInfo();
 			Map<String, String> serdeParams = serdeInfo.getParameters();
 			tbl_row_format.append("ROW FORMAT SERDE \n");
-			tbl_row_format.append("  '" + HiveStringUtils.escapeHiveCommand(serdeInfo.getSerializationLib()) + "' \n");
+			tbl_row_format.append("  '" + escapeHiveCommand(serdeInfo.getSerializationLib()) + "' \n");
 			if (tbl.getStorageHandler() == null) {
 				// If serialization.format property has the default value, it will not to be
 				// included in
 				// SERDE properties
-				if (Warehouse.DEFAULT_SERIALIZATION_FORMAT
+				if (DEFAULT_SERIALIZATION_FORMAT
 						.equals(serdeParams.get(serdeConstants.SERIALIZATION_FORMAT))) {
 					serdeParams.remove(serdeConstants.SERIALIZATION_FORMAT);
 				}
@@ -208,26 +244,26 @@ public class HiveUtils {
 					appendSerdeParams(tbl_row_format, serdeParams).append(" \n");
 				}
 				tbl_row_format.append("STORED AS INPUTFORMAT \n  '"
-						+ HiveStringUtils.escapeHiveCommand(sd.getInputFormat()) + "' \n");
+						+ escapeHiveCommand(sd.getInputFormat()) + "' \n");
 				tbl_row_format
-						.append("OUTPUTFORMAT \n  '" + HiveStringUtils.escapeHiveCommand(sd.getOutputFormat()) + "'");
+						.append("OUTPUTFORMAT \n  '" + escapeHiveCommand(sd.getOutputFormat()) + "'");
 			} else {
 				duplicateProps.add(META_TABLE_STORAGE);
 				tbl_row_format.append("STORED BY \n  '"
-						+ HiveStringUtils.escapeHiveCommand(tbl.getParameters().get(META_TABLE_STORAGE)) + "' \n");
+						+ escapeHiveCommand(tbl.getParameters().get(META_TABLE_STORAGE)) + "' \n");
 				// SerDe Properties
 				if (!serdeParams.isEmpty()) {
 					appendSerdeParams(tbl_row_format, serdeInfo.getParameters());
 				}
 			}
 
-			String tbl_location = "  '" + HiveStringUtils.escapeHiveCommand(sd.getLocation()) + "'";
+			String tbl_location = "  '" + escapeHiveCommand(sd.getLocation()) + "'";
 
 			// Replace s3a/s3n with s3
 			tbl_location = tbl_location.replaceFirst("s3[a,n]://", "s3://");
 
 			// Table properties
-			duplicateProps.addAll(Arrays.asList(StatsSetupConst.TABLE_PARAMS_STATS_KEYS));
+			duplicateProps.addAll(Arrays.asList(TABLE_PARAMS_STATS_KEYS));
 			String tbl_properties = propertiesToString(tbl.getParameters(), duplicateProps);
 
 			createTab_stmt.add(TEMPORARY, tbl_temp);
